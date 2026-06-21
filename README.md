@@ -1,14 +1,14 @@
-# IR-SENTINEL 🛰️
+# SENTINEL 🛰️
 
 *A lightweight incident response sensor for Linux systems, containers, and lab environments.*
 
-IR-SENTINEL is a small C-based host telemetry daemon designed for rapid deployment during incident response, threat hunting, security monitoring, and infrastructure assessments.
+SENTINEL is a small C-based host telemetry daemon designed for rapid deployment during incident response, threat hunting, security monitoring, and infrastructure assessments.
 
 The goal is simple:
 
 > Detect interesting activity, preserve context, and emit structured telemetry that can be consumed by any logging or security platform.
 
-Unlike large endpoint detection and response (EDR) platforms, IR-SENTINEL focuses on minimal dependencies, low resource consumption, and straightforward deployment.
+Unlike large endpoint detection and response (EDR) platforms, SENTINEL focuses on minimal dependencies, low resource consumption, and straightforward deployment.
 
 ---
 
@@ -80,7 +80,7 @@ This enables direct integration with:
 
 ```text
                 ┌─────────────────┐
-                │  IR-SENTINEL    │
+                │  SENTINEL    │
                 └────────┬────────┘
                          │
          ┌───────────────┼───────────────┐
@@ -338,7 +338,7 @@ Release outputs:
 
 ## Project Goals
 
-IR-SENTINEL is intended to provide:
+SENTINEL is intended to provide:
 
 * Rapid incident response deployment
 * Lightweight host visibility
@@ -347,6 +347,6 @@ IR-SENTINEL is intended to provide:
 * Portable telemetry collection
 * Seamless integration into the broader DIP/DIPx ecosystem
 
-The long-term vision is to evolve IR-SENTINEL from a simple sensor into a deployable evidence collection and incident response platform capable of:
+The long-term vision is to evolve SENTINEL from a simple sensor into a deployable evidence collection and incident response platform capable of:
 
 **Detect → Snapshot → Preserve → Enrich → Alert**
