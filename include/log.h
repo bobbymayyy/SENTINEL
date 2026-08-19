@@ -1,5 +1,5 @@
-#ifndef IR_SENTINEL_LOG_H
-#define IR_SENTINEL_LOG_H
+#ifndef SENTINEL_LOG_H
+#define SENTINEL_LOG_H
 
 #include <stdarg.h>
 
