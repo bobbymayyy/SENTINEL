@@ -1,5 +1,5 @@
-#ifndef IR_SENTINEL_FILE_WATCH_H
-#define IR_SENTINEL_FILE_WATCH_H
+#ifndef SENTINEL_FILE_WATCH_H
+#define SENTINEL_FILE_WATCH_H
 
 #include "sentinel.h"
 
