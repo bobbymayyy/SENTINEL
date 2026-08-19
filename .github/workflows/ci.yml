@@ -1,44 +1,84 @@
 name: ci
 
 on:
-  push:
-    branches:
-      - latest
-      - 'agent/**'
   pull_request:
     branches:
       - latest
+  push:
+    branches:
+      - latest
+  workflow_dispatch:
 
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  CPPCHECK_IMAGE: neszt/cppcheck-docker:2.21.0
+
 jobs:
   build-test:
-    runs-on: ubuntu-latest
+    name: build-test (${{ matrix.cc }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
     strategy:
+      fail-fast: false
       matrix:
         cc: [gcc, clang]
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v7
+
       - name: Build and test
         run: make clean check CC=${{ matrix.cc }}
 
   static-analysis:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
+    name: static-analysis
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
-      - name: Install cppcheck
-        timeout-minutes: 5
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Pull pinned cppcheck image
+        run: docker pull "${CPPCHECK_IMAGE}"
+
+      - name: Show cppcheck version
         run: |
-          sudo apt-get -o Acquire::Retries=3 update
-          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends cppcheck
+          docker run --rm \
+            --entrypoint cppcheck \
+            "${CPPCHECK_IMAGE}" \
+            --version
+
       - name: Run cppcheck
-        run: cppcheck --std=c11 --enable=warning,performance,portability --error-exitcode=1 -Iinclude src
+        run: |
+          docker run --rm \
+            --volume "${GITHUB_WORKSPACE}:/workspace:ro" \
+            --workdir /workspace \
+            --entrypoint cppcheck \
+            "${CPPCHECK_IMAGE}" \
+            --std=c11 \
+            --enable=warning,performance,portability \
+            --error-exitcode=1 \
+            -Iinclude \
+            src
 
   container-build:
-    runs-on: ubuntu-latest
+    name: container-build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Validate Dockerfile
+        run: docker build --check .
+
       - name: Build container
-        run: docker build -t sentinel:ci .
+        run: docker build --tag sentinel:ci .
+
+      - name: Smoke-test container
+        run: docker run --rm sentinel:ci --version
