@@ -1,0 +1,14 @@
+# SENTINEL 0.2.x configuration.
+# This is a deliberately small, dependency-free YAML subset.
+interval_seconds: 2
+monitor_processes: true
+monitor_network: true
+monitor_files: true
+emit_baseline: true
+default_watch_paths: true
+
+# Absolute host paths. With --host-roots, /etc, /var/log, and /proc
+# are transparently mapped into /host/etc, /host/var/log, and /host/proc.
+watch_paths:
+  - /etc/pam.d
+  - /etc/cron.d

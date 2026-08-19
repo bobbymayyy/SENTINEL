@@ -1,0 +1,9 @@
+interval_seconds: 7
+monitor_processes: false
+monitor_network: true
+monitor_files: true
+emit_baseline: false
+default_watch_paths: false
+watch_paths:
+  - /etc/passwd
+  - "/etc/ssh"

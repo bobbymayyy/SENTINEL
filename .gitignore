@@ -1,0 +1,5 @@
+/sentinel
+/ir-sentinel
+/src/*.o
+/tests/test_config
+*.core
