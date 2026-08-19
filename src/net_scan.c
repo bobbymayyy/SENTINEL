@@ -137,6 +137,7 @@ static int retain_previous_proto(struct listener_vec *current, const char *proto
 }
 
 static bool contains_listener(const struct listener *items, size_t count, const struct listener *needle) {
+    if (count == 0) return false;
     return bsearch(needle, items, count, sizeof(*items), listener_cmp) != NULL;
 }
 
@@ -172,7 +173,9 @@ int scan_network_listeners(const struct sentinel_config *cfg) {
         if (retain_previous_proto(&current, "tcp6") != 0) goto oom;
     }
 
-    qsort(current.items, current.count, sizeof(*current.items), listener_cmp);
+    if (current.count > 1) {
+        qsort(current.items, current.count, sizeof(*current.items), listener_cmp);
+    }
     current.count = dedupe_sorted(current.items, current.count);
 
     if (initialized || cfg->emit_baseline) {

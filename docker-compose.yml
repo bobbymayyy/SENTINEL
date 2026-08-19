@@ -6,9 +6,13 @@ services:
     pid: host
     network_mode: host
     read_only: true
+    cap_drop:
+      - ALL
     cap_add:
       - SYS_PTRACE
       - DAC_READ_SEARCH
+    security_opt:
+      - no-new-privileges:true
     volumes:
       - /proc:/host/proc:ro
       - /etc:/host/etc:ro
