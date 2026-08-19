@@ -200,7 +200,9 @@ int scan_processes(const struct sentinel_config *cfg) {
         return rc;
     }
 
-    qsort(current, current_count, sizeof(*current), proc_key_cmp);
+    if (current_count > 1) {
+        qsort(current, current_count, sizeof(*current), proc_key_cmp);
+    }
     free(previous);
     previous = current;
     previous_count = current_count;
