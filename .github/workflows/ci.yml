@@ -1,0 +1,40 @@
+name: ci
+
+on:
+  push:
+    branches:
+      - latest
+      - 'agent/**'
+  pull_request:
+    branches:
+      - latest
+
+permissions:
+  contents: read
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        cc: [gcc, clang]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and test
+        run: make clean check CC=${{ matrix.cc }}
+
+  static-analysis:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install cppcheck
+        run: sudo apt-get update && sudo apt-get install -y cppcheck
+      - name: Run cppcheck
+        run: cppcheck --std=c11 --enable=warning,performance,portability --error-exitcode=1 -Iinclude src
+
+  container-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build container
+        run: docker build -t sentinel:ci .
