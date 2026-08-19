@@ -1,46 +1,62 @@
 # SENTINEL 🛰️
 
-*A lightweight Linux incident-response sensor that emits portable JSON telemetry without dragging an EDR-sized dependency tree behind it.*
+**A small Linux incident-response sensor written in C, built to emit useful host telemetry without dragging an EDR-sized dependency tree behind it.**
 
-SENTINEL is a small C-based host telemetry sensor for incident response, threat hunting, security monitoring, containers, and lab environments. It watches processes, sensitive files, and TCP listeners, preserves enough state to identify meaningful changes, and writes newline-delimited JSON to stdout for whatever pipeline you already use.
-
-The operating idea remains simple:
+SENTINEL watches processes, sensitive files, and TCP listeners, maintains lightweight state between scans, and emits newline-delimited JSON to stdout. It is designed for incident response, threat hunting, lab systems, containers, disconnected environments, and infrastructure where a compact operational sensor is more useful than a heavyweight endpoint platform.
 
 > **Detect → Snapshot → Preserve → Enrich → Alert**
 
-SENTINEL 0.2.0 is the first hardening and configurability iteration. It keeps the original polling architecture intentionally small while fixing state-tracking bugs, adding configurable watch paths and telemetry classes, and establishing real build/test CI.
+## Current status
 
-## What 0.2.0 adds
+**Version:** `0.2.0`
 
-- Dependency-free configuration using a deliberately small YAML subset.
-- Configurable inotify watch paths, with transparent `/host` path mapping in sidecar mode.
-- Per-class telemetry controls for process, network, and file events.
-- Optional suppression of the initial baseline with `emit_baseline: false` / `--no-baseline`.
-- One-shot collection with `--once` for fast triage and scripting.
-- PID reuse-safe process tracking using `/proc/<pid>/stat` start time instead of a permanent PID bitmap.
-- Stateful TCP listener tracking, including `network_listen` and `network_close` transitions rather than re-emitting every listener every poll.
-- Correct IPv4 and IPv6 listener address decoding from `/proc/net/tcp*`.
-- Correct inotify watch-descriptor-to-path mapping plus automatic re-arming when watched files are replaced.
-- JSON schema and sensor version fields for downstream consumers.
-- Hardened PIE builds, tests, cppcheck, GCC/Clang CI, and container-build CI.
-- Build artifacts removed from source control and ignored going forward.
-- Primary binary renamed to `sentinel`; `ir-sentinel` remains as a compatibility symlink.
+SENTINEL 0.2.0 is the first major correctness, configurability, and engineering-hardening iteration. The sensor is intentionally still small and polling-based for process and socket discovery, but the state model is substantially safer than the original scaffold and the repository now has repeatable GCC, Clang, static-analysis, and container validation through GitHub Actions.
 
-## Telemetry
+The container smoke test used by CI is intentionally simple:
 
-### Process observations
+```bash
+docker run --rm sentinel:ci --version
+```
 
-SENTINEL polls `/proc` and emits a `process_seen` event when it observes a PID/start-time pair that was not present in the previous scan. Using start time prevents PID reuse from hiding later processes.
+Expected output:
+
+```text
+SENTINEL 0.2.0
+```
+
+## Design goals
+
+SENTINEL favors:
+
+- **Small operational footprint** - C, libc, Linux interfaces, and no runtime YAML library.
+- **Portable telemetry** - NDJSON on stdout, operational diagnostics on stderr.
+- **Graceful degradation** - unavailable sensors should warn rather than invent state.
+- **Explicit semantics** - polling observations are called observations, not fake real-time exec events.
+- **Container awareness** - the same configuration can work natively or through `/host/...` mounts.
+- **Defensive state tracking** - process and listener identity are preserved across polling cycles.
+- **Reviewable engineering** - strict compiler flags, tests, static analysis, and bounded CI jobs.
+
+## What 0.2.0 includes
+
+### Process telemetry
+
+SENTINEL scans `/proc` and identifies processes by **PID plus process start time** from `/proc/<pid>/stat`.
+
+That matters because Linux eventually reuses PIDs. Tracking only the integer PID can silently hide a later process that receives the same number.
+
+Newly observed process identities emit:
 
 ```json
 {"event":"process_seen","schema_version":1,"sensor_version":"0.2.0","pid":4123,"ppid":1,"uid":0,"start_ticks":12345678,"user":"root","comm":"bash","cmd":"bash -c id","time":"2026-08-18T21:30:00Z"}
 ```
 
-This is intentionally called **process_seen**, not `process_exec`: polling can observe new processes, but it cannot guarantee capture of every exec between intervals. Netlink process events remain a later phase.
+The event is intentionally named `process_seen`. Polling cannot guarantee capture of every `exec` that occurs between intervals.
 
-### File integrity events
+### File integrity telemetry
 
-Default watches cover:
+SENTINEL uses inotify for file and directory watches.
+
+Built-in paths:
 
 - `/etc/passwd`
 - `/etc/shadow`
@@ -49,59 +65,55 @@ Default watches cover:
 - `/etc/sudoers.d`
 - `/etc/ssh`
 
-Additional absolute paths can be supplied through YAML or repeated `--watch` options.
+Additional absolute paths can be supplied through configuration or repeated `--watch` arguments.
+
+Example:
 
 ```json
 {"event":"file_change","schema_version":1,"sensor_version":"0.2.0","path":"/etc/sudoers","action":"close_write","time":"2026-08-18T21:31:00Z"}
 ```
 
-SENTINEL keeps the intended watch path even if a watched file is atomically replaced. Once the path reappears, the watch is armed again.
+The watcher keeps desired paths separately from inotify watch descriptors. If a watched file is replaced atomically, SENTINEL detects the invalidated watch and attempts to arm it again after the path reappears.
 
-### TCP listener transitions
+### TCP listener telemetry
 
-SENTINEL reads `/proc/net/tcp` and `/proc/net/tcp6`, maintains listener state between scans, and emits transitions.
+SENTINEL currently reads `/proc/net/tcp` and `/proc/net/tcp6`, snapshots active listening sockets, and diffs that state between polling cycles.
+
+New listener:
 
 ```json
 {"event":"network_listen","schema_version":1,"sensor_version":"0.2.0","proto":"tcp6","local_addr":"::1","local_port":4444,"inode":12345,"time":"2026-08-18T21:32:00Z"}
 ```
 
+Listener disappearance:
+
 ```json
 {"event":"network_close","schema_version":1,"sensor_version":"0.2.0","proto":"tcp6","local_addr":"::1","local_port":4444,"inode":12345,"time":"2026-08-18T21:33:00Z"}
 ```
 
-## Build
+The state tracker avoids re-emitting every active listener on every cycle and preserves prior protocol state if one `/proc/net` source temporarily cannot be read.
 
-Requirements:
+## 0.2.0 correctness fixes
 
-- Linux
-- GCC or Clang
-- GNU Make
-- Kernel inotify support
+The 0.2.0 line includes several fixes that materially change behavior from the original scaffold:
 
-```bash
-make
-make check
-```
-
-The primary binary is:
-
-```bash
-./sentinel
-```
-
-For compatibility with 0.1.0 workflows, `make` also creates:
-
-```bash
-./ir-sentinel -> sentinel
-```
-
-### Build hardening
-
-The default Makefile enables stack protection, FORTIFY, PIE, RELRO, and immediate symbol binding while retaining `-Wall -Wextra -Wpedantic -Werror`.
+- Replaced permanent PID-bit tracking with PID + start-time identities so PID reuse is handled correctly.
+- Corrected inotify descriptor mapping instead of assuming watch descriptors were sequential array indexes.
+- Added automatic watch re-arming after atomic replacement or invalidation.
+- Replaced repeated listener snapshots with `network_listen` and `network_close` transitions.
+- Corrected IPv4 and IPv6 decoding from `/proc/net/tcp*`.
+- Preserved previous listener state when an individual protocol scan fails, avoiding false close storms.
+- Guarded empty process and listener state operations so sorting/search helpers are not invoked on absent state.
+- Added structured schema and sensor version fields to emitted telemetry.
+- Replaced legacy `ir-sentinel` naming internally while retaining `ir-sentinel` as a compatibility symlink.
+- Removed compiled objects and binaries from source control.
+- Normalized remaining legacy header guards.
 
 ## Configuration
 
-Start from `sentinel.example.yaml`:
+SENTINEL uses a deliberately small, dependency-free YAML subset.
+
+Example `sentinel.example.yaml`:
 
 ```yaml
 interval_seconds: 2
@@ -116,23 +128,33 @@ watch_paths:
   - /etc/cron.d
 ```
 
-Validate it without starting the sensor:
+Validate configuration without starting the sensor:
 
 ```bash
 ./sentinel --config sentinel.example.yaml --check-config
 ```
 
-Run with it:
+Run with configuration:
 
 ```bash
 ./sentinel --config sentinel.example.yaml
 ```
 
-The parser intentionally supports only the configuration SENTINEL needs: top-level scalar keys plus the `watch_paths` sequence. It rejects unknown keys and malformed values instead of silently guessing. YAML anchors, tags, nested mappings, escape processing, and multiline scalars are intentionally out of scope so configuration does not require a YAML library.
+Supported configuration keys:
 
-### CLI overrides
+| Key | Purpose |
+|---|---|
+| `interval_seconds` | Polling interval from 1 to 86400 seconds |
+| `monitor_processes` | Enable process observations |
+| `monitor_network` | Enable TCP listener observations |
+| `monitor_files` | Enable inotify file observations |
+| `emit_baseline` | Emit the first process/listener snapshot |
+| `default_watch_paths` | Enable built-in `/etc` watches |
+| `watch_paths` | Additional absolute watch paths |
 
-CLI options are applied after the config file, so they override file settings:
+Unknown keys and malformed values are rejected. YAML anchors, tags, nested mappings, multiline scalars, and general-purpose YAML features are intentionally outside this parser's scope.
+
+## CLI
 
 ```text
 --config FILE
@@ -147,148 +169,256 @@ CLI options are applied after the config file, so they override file settings:
 --baseline / --no-baseline
 --once
 --version
+-h / --help
 ```
 
-Examples:
+CLI options are applied after the configuration file and therefore override file settings.
+
+Useful patterns:
 
 ```bash
-# Snapshot current processes/listeners once and exit
+# One-shot process and listener snapshot
 ./sentinel --once --no-files
 
-# Watch only file changes, with no built-in paths
+# File-only sensor with explicitly selected paths
 ./sentinel --no-processes --no-network --no-default-watches \
-  --watch /etc/passwd --watch /etc/systemd/system
+  --watch /etc/passwd \
+  --watch /etc/systemd/system
 
-# Establish state silently, then emit only later process/listener changes
+# Establish process/listener state silently, then report changes
 ./sentinel --no-baseline
 ```
 
+## Build and test
+
+Requirements:
+
+- Linux
+- GCC or Clang
+- GNU Make
+- Kernel inotify support
+
+Build:
+
+```bash
+make
+```
+
+Build and run tests:
+
+```bash
+make check
+```
+
+Outputs:
+
+```text
+./sentinel
+./ir-sentinel -> sentinel
+```
+
+The default build enables:
+
+- `-Wall -Wextra -Wpedantic -Werror`
+- stack protector
+- `_FORTIFY_SOURCE=2`
+- PIE
+- RELRO
+- immediate symbol binding
+
 ## Container deployment
 
-The container build uses Alpine 3.24 and runs as an unprivileged `sentinel` user.
+The production image uses Alpine 3.24 and runs as an unprivileged `sentinel` user.
+
+Build:
 
 ```bash
 docker build -t sentinel .
+```
 
+Run directly:
+
+```bash
 docker run --rm \
   --pid=host \
   --network=host \
   --read-only \
+  --cap-drop ALL \
   --cap-add SYS_PTRACE \
   --cap-add DAC_READ_SEARCH \
+  --security-opt no-new-privileges:true \
   -v /proc:/host/proc:ro \
   -v /etc:/host/etc:ro \
   -v /var/log:/host/var/log:ro \
   sentinel --host-roots
 ```
 
-Or:
+Or use Compose:
 
 ```bash
 docker compose up --build
 ```
 
-In `--host-roots` mode, configured paths beginning with `/etc`, `/var/log`, or `/proc` are transparently translated to their `/host/...` mounts. That lets the same config file work natively and in the sidecar container.
+The Compose definition drops the default capability set, adds only the two capabilities currently requested by the host-observation deployment, enables `no-new-privileges`, uses a read-only container filesystem, and mounts host data read-only.
 
-## Output and integrations
+In `--host-roots` mode, configured paths under `/etc`, `/var/log`, and `/proc` are transparently mapped to `/host/etc`, `/host/var/log`, and `/host/proc`.
 
-Telemetry is newline-delimited JSON on stdout. Logs about startup, configuration, permissions, and degraded sensors go to stderr, so collectors can keep telemetry and operational diagnostics separate.
+A `.dockerignore` keeps Git metadata and local build artifacts out of the Docker build context.
 
-SENTINEL can feed:
+## Event model
 
-- Splunk
-- Security Onion
-- Wazuh
-- Loki
-- ELK / OpenSearch pipelines
-- Fluent Bit
-- Syslog bridges
-- Custom collectors and webhooks
+| Event | Source | Meaning |
+|---|---|---|
+| `process_seen` | `/proc` state diff | A PID/start-time identity was not present in the previous scan |
+| `file_change` | inotify | A watched file or directory produced a tracked change event |
+| `network_listen` | TCP state diff | A listener appeared |
+| `network_close` | TCP state diff | A previously observed listener disappeared |
+
+All telemetry is NDJSON on **stdout**. Startup messages, warnings, permission failures, and degraded sensor diagnostics go to **stderr**.
+
+That split is intentional so a collector can ingest stdout without mixing operational logs into the event stream.
 
 ## Architecture
 
 ```text
-                  ┌──────────────────┐
-                  │     SENTINEL     │
-                  └────────┬─────────┘
-                           │
-          ┌────────────────┼────────────────┐
-          │                │                │
-          ▼                ▼                ▼
-   /proc process      inotify file     /proc TCP
-     state diff         watchers       state diff
-          │                │                │
-          └────────────────┼────────────────┘
-                           ▼
-                   NDJSON event stream
-                           │
-                           ▼
-                         stdout
+                       ┌──────────────────┐
+                       │     SENTINEL     │
+                       └────────┬─────────┘
+                                │
+               ┌────────────────┼────────────────┐
+               │                │                │
+               ▼                ▼                ▼
+        /proc process       inotify file      /proc TCP
+          state diff          watchers        state diff
+               │                │                │
+               └────────────────┼────────────────┘
+                                ▼
+                        NDJSON event stream
+                                │
+                                ▼
+                              stdout
 ```
 
-0.2.0 deliberately remains a polling sensor for process and socket discovery. Linux documents `/proc/net/tcp` and `/proc/net/tcp6` as deprecated in favor of `tcp_diag`; future netlink work should replace polling where the deployment environment permits it rather than layering a second pretend-real-time path on top.
+## GitHub Actions CI
 
-## CI
+The current Actions pipeline is intentionally CI-focused. It does **not** publish releases yet.
 
-The repository now has an actual GitHub Actions pipeline rather than only a roadmap sketch:
+Runs occur:
+
+- once for pull requests targeting `latest`
+- once against the exact merged state after a push lands on `latest`
+- manually through `workflow_dispatch`
+
+Jobs:
 
 ```text
-Pull request / push
-        │
-        ├── GCC build + tests
-        ├── Clang build + tests
-        ├── cppcheck
-        └── container build
+ci
+├── build-test (gcc)
+├── build-test (clang)
+├── static-analysis
+└── container-build
+    ├── Dockerfile validation
+    ├── production image build
+    └── sentinel --version smoke test
 ```
 
-Future release automation can add image scanning, SBOM generation, signed artifacts, GHCR publishing, and multi-architecture release builds when the release model is ready for them.
+Static analysis uses an explicit Cppcheck `2.21.0` container image tag, avoiding runtime `apt-get` installation and the Ubuntu mirror delays that previously made the job unreliable.
 
-## Roadmap
+Additional CI safeguards include:
 
-### Phase 1 — sensor scaffold
+- fixed `ubuntu-24.04` runners
+- bounded job timeouts
+- `fail-fast: false` across compiler jobs
+- concurrency cancellation for superseded runs
+- read-only repository permissions
+- checkout credentials disabled after checkout
 
-- [x] Process discovery
-- [x] File monitoring
-- [x] Listening port detection
-- [x] JSON logging
-- [x] Container deployment
+More detail lives in `.github/CI.md`.
 
-### Phase 2 — correctness and operational control
+## Known limitations
 
-- [x] PID reuse-safe process state
-- [x] Stateful TCP listener transitions
-- [x] IPv6 listener decoding
-- [x] Configurable watch paths
-- [x] YAML-subset configuration
-- [x] Telemetry-class filtering
-- [x] Baseline suppression
-- [x] One-shot collection
-- [x] Build/test/static-analysis CI
-- [ ] Netlink process events
-- [ ] Netlink socket / `sock_diag` events
+SENTINEL 0.2.0 is useful, but deliberately not pretending to be a finished EDR.
 
-### Phase 3 — detection and evidence
+- Process and socket discovery are polling-based. Short-lived activity can occur entirely between scans.
+- `/proc/net/tcp` and `/proc/net/tcp6` are legacy kernel interfaces. A netlink `sock_diag` implementation should eventually replace them where available.
+- Only TCP listeners are currently modeled. UDP and broader socket lifecycle telemetry are not implemented.
+- Process telemetry does not yet include executable hashes, full parent lineage, namespace/cgroup identity, capabilities, or container metadata.
+- File monitoring reports inotify activity but does not yet hash changed files or preserve evidence.
+- Output is stdout only. There is no buffering, local spool, webhook, syslog, or direct SIEM sink yet.
+- The YAML subset is intentionally narrow and should not be presented as a general YAML parser.
+- The Cppcheck image uses an explicit version tag, not an immutable image digest yet.
 
-- [ ] Rule engine
-- [ ] Detection signatures
-- [ ] Alert enrichment
-- [ ] Process tree reconstruction
-- [ ] Evidence preservation
-- [ ] Artifact hashing and collection manifests
+## Implementation roadmap
 
-### Phase 4 — deployment and integration
+### 0.3.x - event fidelity and sensor health
 
-- [ ] Distributed deployment
-- [ ] Webhook integrations
-- [ ] SIEM-specific outputs
-- [ ] Ansible deployment role
-- [ ] DIP / DIPx integration
-- [ ] Signed release artifacts and SBOMs
+Highest-value next work:
+
+- [ ] Add Linux process event support using a netlink-capable backend where the host kernel permits it, with polling retained as a fallback.
+- [ ] Replace `/proc/net/tcp*` polling with `NETLINK_SOCK_DIAG` snapshots/events where practical.
+- [ ] Add UDP listener visibility.
+- [ ] Add sensor-health events and counters for scan failures, dropped/invalid events, watch re-arm failures, and degraded telemetry classes.
+- [ ] Add monotonically increasing event sequence numbers and a per-process sensor instance ID.
+- [ ] Add hostname, boot ID, kernel, architecture, namespace, and container/cgroup context to common event metadata.
+- [ ] Add deterministic parser fixtures for process and socket data so edge cases do not depend on the CI host's live `/proc` state.
+
+### 0.4.x - enrichment and detection
+
+- [ ] Reconstruct process ancestry and parent lineage.
+- [ ] Capture executable path, effective capabilities, namespaces, cgroup/container identity, and selected environment metadata.
+- [ ] Add executable and changed-file hashing with configurable size limits.
+- [ ] Introduce a small rule engine with event type, field matching, severity, tags, and allow/suppress logic.
+- [ ] Add built-in detections for suspicious listeners, sensitive-file changes, unusual privilege transitions, and selected persistence locations.
+- [ ] Separate observation events from alert events while retaining the original evidence fields.
+
+### 0.5.x - evidence and resilient output
+
+- [ ] Add evidence manifests containing hashes, timestamps, sensor version, host identity, and collection reason.
+- [ ] Add bounded local spooling so downstream collector outages do not immediately discard telemetry.
+- [ ] Add stdout, syslog, webhook, and optional file sinks behind one output interface.
+- [ ] Add backpressure/drop policy metrics rather than silently losing events.
+- [ ] Add configurable redaction for command lines or sensitive fields where required.
+
+### 0.6.x - deployment and release engineering
+
+- [ ] Add a hardened systemd service example.
+- [ ] Add an Ansible deployment role.
+- [ ] Publish multi-architecture container images to GHCR.
+- [ ] Generate SBOMs and provenance metadata.
+- [ ] Sign release binaries and container images.
+- [ ] Pin CI container dependencies by immutable digest.
+- [ ] Add release artifacts for common Linux architectures.
+- [ ] Add DIP / DIPx deployment integration.
+
+### Longer-term research
+
+- [ ] Evaluate an optional eBPF backend for higher-fidelity process/socket telemetry while keeping a non-eBPF fallback.
+- [ ] Explore filesystem evidence collection using fanotify where its semantics are a better fit than inotify.
+- [ ] Add fuzzing for the config parser, `/proc` parsers, and JSON emission boundaries.
+- [ ] Add richer event-schema compatibility tests that can also be shared with GARGOYLE.
+- [ ] Add an optional lightweight controller/collector without turning the host sensor itself into a large agent framework.
+
+## Suggested implementation order
+
+If the goal is to increase operational value without losing SENTINEL's small footprint, the strongest sequence is:
+
+1. **Sensor health + common event metadata**
+2. **`sock_diag` network backend**
+3. **Higher-fidelity process events with polling fallback**
+4. **Process ancestry and executable enrichment**
+5. **Hashing + evidence manifests**
+6. **Small rule engine**
+7. **Buffered outputs and integrations**
+8. **Signed releases, SBOMs, GHCR, and deployment automation**
+
+That order improves trust in the telemetry before adding increasingly sophisticated detections on top of it.
 
 ## Project boundary
 
-SENTINEL remains the lean C operational sensor. GARGOYLE can share schemas, tests, and behavioral expectations, but it remains a separate Rust security-engineering project rather than a stealth rewrite of SENTINEL.
+SENTINEL stays the lean C operational sensor.
+
+GARGOYLE may share schemas, tests, and behavioral expectations, but it remains a separate Rust security-engineering project rather than becoming a stealth rewrite of SENTINEL.
 
 ## License
 
-See `LICENSE.md`.
+SENTINEL is licensed under **GPL-3.0**. See `LICENSE.md` for the full license text.
